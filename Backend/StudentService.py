@@ -101,7 +101,7 @@ class StudentService:
         """With no semester_id this is the full transcript."""
         student = self._student(user_id)
         q = (db().table("registrations")
-             .select("registration_id, units(unit_code, unit_name, credit_hours), "
+             .select("registration_id, semester_id, units(unit_code, unit_name, credit_hours), "
                      "semesters(academic_year, semester_name, start_date), marks(cat_mark, exam_mark)")
              .eq("student_id", student["student_id"]))
         if semester_id:
@@ -111,6 +111,7 @@ class StudentService:
         for r in q.execute().data:
             sem, marks = one(r["semesters"]), one(r["marks"]) or {}
             out.append(with_totals({
+                "semester_id": r["semester_id"],
                 "start_date": sem["start_date"], "academic_year": sem["academic_year"],
                 "semester_name": sem["semester_name"], **one(r["units"]),
                 "cat_mark": marks.get("cat_mark"), "exam_mark": marks.get("exam_mark"),

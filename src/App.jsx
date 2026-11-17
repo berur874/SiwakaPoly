@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import api from './api';
-import { gradeFor, kes } from './utils';
+import { gradeFor, kes, todayLocal } from './utils';
 
 // -------------------------------------------------------------
 // Toast Notification Context
@@ -683,16 +683,17 @@ function UnitRegistration() {
 // 4. STUDENT RESULTS & TRANSCRIPT
 // -------------------------------------------------------------
 function Results() {
-  const [results, setResults] = useState([]);
-  const [semesterFilter, setSemesterFilter] = useState('');
+  const [allResults, setAllResults] = useState([]);
+  const [semesterFilter, setSemesterFilter] = useState(''); // a semester_id, or '' for all
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
-  const loadResults = async (semId = null) => {
+  // Load the full transcript once; the semester filter is applied client-side by id.
+  const loadResults = async () => {
     setLoading(true);
     try {
-      const data = await api.getStudentResults(semId);
-      setResults(data || []);
+      const data = await api.getStudentResults();
+      setAllResults(data || []);
     } catch (err) {
       showToast(err.message || 'Failed to load results', 'error');
     } finally {
@@ -701,17 +702,21 @@ function Results() {
   };
 
   useEffect(() => {
-    loadResults(semesterFilter || null);
-  }, [semesterFilter]);
+    loadResults();
+  }, []);
 
-  const semestersList = useMemo(() => {
+  const semesterOptions = useMemo(() => {
     const map = new Map();
-    results.forEach((r) => {
-      const key = `${r.academic_year} - ${r.semester_name}`;
-      if (!map.has(key)) map.set(key, r);
+    allResults.forEach((r) => {
+      if (!map.has(r.semester_id)) map.set(r.semester_id, `${r.academic_year} - ${r.semester_name}`);
     });
-    return Array.from(map.keys());
-  }, [results]);
+    return Array.from(map, ([id, label]) => ({ id: String(id), label }));
+  }, [allResults]);
+
+  const results = useMemo(
+    () => (semesterFilter ? allResults.filter((r) => String(r.semester_id) === semesterFilter) : allResults),
+    [allResults, semesterFilter]
+  );
 
   const gradedResults = results.filter((r) => r.total_mark !== null && r.total_mark !== undefined);
   const average =
@@ -737,14 +742,14 @@ function Results() {
             aria-label="Filter by Semester"
           >
             <option value="">All Semesters (Full Transcript)</option>
-            {semestersList.map((sem) => (
-              <option key={sem} value={sem}>
-                {sem}
+            {semesterOptions.map((sem) => (
+              <option key={sem.id} value={sem.id}>
+                {sem.label}
               </option>
             ))}
           </select>
-          <button className="btn btn-primary" onClick={() => loadResults(semesterFilter || null)}>
-            View
+          <button className="btn btn-secondary" onClick={loadResults}>
+            Refresh
           </button>
         </div>
 
@@ -992,25 +997,29 @@ function StudentAttendance() {
 // 5. LECTURER ATTENDANCE ENTRY
 // -------------------------------------------------------------
 function Attendance() {
+  const [searchParams] = useSearchParams();
   const [units, setUnits] = useState([]);
   const [selectedUnit, setSelectedUnit] = useState('');
   const [classList, setClassList] = useState([]);
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(todayLocal);
   const [statuses, setStatuses] = useState({});
+  const [alreadyRecorded, setAlreadyRecorded] = useState(false);
   const [loadingUnits, setLoadingUnits] = useState(true);
   const [loadingClass, setLoadingClass] = useState(false);
   const [saving, setSaving] = useState(false);
+  const requestId = React.useRef(0);
   const { showToast } = useToast();
 
   useEffect(() => {
     async function loadUnits() {
       setLoadingUnits(true);
       try {
-        const data = await api.getLecturerUnits();
-        setUnits(data || []);
-        if (data && data.length > 0) {
-          setSelectedUnit(data[0].unit_id);
-        }
+        const data = (await api.getLecturerUnits()) || [];
+        setUnits(data);
+        // Honour ?unit=<id> from the My Units cards, else fall back to the first unit
+        const wanted = Number(searchParams.get('unit'));
+        const pick = data.find((u) => u.unit_id === wanted) || data[0];
+        if (pick) setSelectedUnit(pick.unit_id);
       } catch (err) {
         showToast(err.message || 'Failed to load assigned units', 'error');
       } finally {
@@ -1020,29 +1029,47 @@ function Attendance() {
     loadUnits();
   }, []);
 
-  const loadStudents = async (unitId) => {
-    if (!unitId) return;
+  // Loads the roster AND whatever was already saved for that date, so saving again never
+  // silently resets earlier Absent/Late/Excused entries to Present.
+  const loadRoster = async (unitId, forDate) => {
+    if (!unitId || !forDate) return;
+    const myRequest = ++requestId.current;
     setLoadingClass(true);
     try {
-      const students = await api.getClassList(unitId);
-      setClassList(students || []);
+      const [students, saved] = await Promise.all([
+        api.getClassList(unitId),
+        api.getAttendanceForDate(unitId, forDate),
+      ]);
+      if (myRequest !== requestId.current) return; // a newer unit/date was chosen meanwhile
+      const savedByReg = {};
+      (saved || []).forEach((r) => {
+        savedByReg[r.registration_id] = r.status;
+      });
       const initial = {};
       (students || []).forEach((s) => {
-        initial[s.registration_id] = 'Present';
+        initial[s.registration_id] = savedByReg[s.registration_id] || 'Present';
       });
+      setClassList(students || []);
       setStatuses(initial);
+      setAlreadyRecorded((saved || []).length > 0);
     } catch (err) {
-      showToast(err.message || 'Failed to load class list', 'error');
+      if (myRequest === requestId.current) showToast(err.message || 'Failed to load class list', 'error');
     } finally {
-      setLoadingClass(false);
+      if (myRequest === requestId.current) setLoadingClass(false);
     }
   };
 
   useEffect(() => {
-    if (selectedUnit) {
-      loadStudents(selectedUnit);
-    }
-  }, [selectedUnit]);
+    if (selectedUnit && date) loadRoster(selectedUnit, date);
+  }, [selectedUnit, date]);
+
+  const markAll = (status) => {
+    const next = {};
+    classList.forEach((s) => {
+      next[s.registration_id] = status;
+    });
+    setStatuses(next);
+  };
 
   const handleSave = async () => {
     if (!selectedUnit || classList.length === 0) return;
@@ -1055,6 +1082,7 @@ function Attendance() {
 
       const res = await api.recordAttendance(selectedUnit, { date, records });
       showToast(res.message || 'Attendance saved successfully', 'success');
+      setAlreadyRecorded(true);
     } catch (err) {
       showToast(err.message || 'Failed to save attendance', 'error');
     } finally {
@@ -1081,13 +1109,23 @@ function Attendance() {
           <input
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            max={todayLocal()}
+            onChange={(e) => e.target.value && setDate(e.target.value)}
             aria-label="Attendance Date"
           />
-          <button className="btn btn-primary" onClick={() => loadStudents(selectedUnit)}>
+          <button className="btn btn-secondary" onClick={() => loadRoster(selectedUnit, date)}>
             Reload Roster
           </button>
         </div>
+
+        {!loadingUnits && units.length === 0 && (
+          <div className="error-banner">No units are allocated to you this semester.</div>
+        )}
+        {alreadyRecorded && !loadingClass && (
+          <div className="summary-banner" style={{ marginTop: 0, marginBottom: 16 }}>
+            Attendance was already recorded for this unit on {date}. Saving will update it.
+          </div>
+        )}
 
         {loadingClass ? (
           <div className="py-8 text-center text-slate-500">Loading student roster...</div>
@@ -1142,13 +1180,21 @@ function Attendance() {
               </table>
             </div>
             <div className="table-footer">
-              <button
-                className="btn btn-primary"
-                onClick={handleSave}
-                disabled={saving || classList.length === 0}
-              >
-                {saving ? 'Saving...' : 'Save Attendance'}
-              </button>
+              <div className="footer-actions">
+                <button
+                  className="btn btn-primary"
+                  onClick={handleSave}
+                  disabled={saving || classList.length === 0}
+                >
+                  {saving ? 'Saving...' : alreadyRecorded ? 'Update Attendance' : 'Save Attendance'}
+                </button>
+                <button className="btn btn-secondary" onClick={() => markAll('Present')} disabled={classList.length === 0}>
+                  Mark all Present
+                </button>
+                <button className="btn btn-secondary" onClick={() => markAll('Absent')} disabled={classList.length === 0}>
+                  Mark all Absent
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -1161,6 +1207,7 @@ function Attendance() {
 // 6. LECTURER MARKS ENTRY
 // -------------------------------------------------------------
 function Marks() {
+  const [searchParams] = useSearchParams();
   const [units, setUnits] = useState([]);
   const [selectedUnit, setSelectedUnit] = useState('');
   const [classList, setClassList] = useState([]);
@@ -1175,10 +1222,12 @@ function Marks() {
       setLoadingUnits(true);
       try {
         const data = await api.getLecturerUnits();
-        setUnits(data || []);
-        if (data && data.length > 0) {
-          setSelectedUnit(data[0].unit_id);
-        }
+        const list = data || [];
+        setUnits(list);
+        // Honour ?unit=<id> from the My Units cards, else fall back to the first unit
+        const wanted = Number(searchParams.get('unit'));
+        const pick = list.find((u) => u.unit_id === wanted) || list[0];
+        if (pick) setSelectedUnit(pick.unit_id);
       } catch (err) {
         showToast(err.message || 'Failed to load assigned units', 'error');
       } finally {
@@ -1243,14 +1292,26 @@ function Marks() {
       }
     }
 
+    // The API rejects an entry that has neither mark, so send only rows the lecturer filled in.
+    // Students with both fields blank are simply left untouched.
+    const entries = classList
+      .map((s) => {
+        const e = markEntries[s.registration_id] || {};
+        return {
+          registration_id: s.registration_id,
+          cat_mark: e.cat_mark !== '' && e.cat_mark != null ? Number(e.cat_mark) : null,
+          exam_mark: e.exam_mark !== '' && e.exam_mark != null ? Number(e.exam_mark) : null,
+        };
+      })
+      .filter((e) => e.cat_mark !== null || e.exam_mark !== null);
+
+    if (entries.length === 0) {
+      showToast('Enter at least one mark before saving', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
-      const entries = classList.map((s) => ({
-        registration_id: s.registration_id,
-        cat_mark: markEntries[s.registration_id]?.cat_mark !== '' ? Number(markEntries[s.registration_id]?.cat_mark) : null,
-        exam_mark: markEntries[s.registration_id]?.exam_mark !== '' ? Number(markEntries[s.registration_id]?.exam_mark) : null,
-      }));
-
       const res = await api.enterMarks(selectedUnit, { entries });
       showToast(res.message || 'Marks saved successfully', 'success');
       await loadClassMarks(selectedUnit);
@@ -1265,11 +1326,14 @@ function Marks() {
     let csv = 'Admission No,Student Name,CAT (/30),Exam (/70),Total (/100),Grade\r\n';
     classList.forEach((s) => {
       const entry = markEntries[s.registration_id] || {};
-      const cat = entry.cat_mark !== '' ? Number(entry.cat_mark) : 0;
-      const exam = entry.exam_mark !== '' ? Number(entry.exam_mark) : 0;
-      const total = cat + exam;
-      const grade = getGrade(total);
-      csv += `"${s.admission_no}","${s.first_name} ${s.last_name}",${cat},${exam},${total},"${grade}"\r\n`;
+      const hasCat = entry.cat_mark !== '' && entry.cat_mark != null;
+      const hasExam = entry.exam_mark !== '' && entry.exam_mark != null;
+      const cat = hasCat ? Number(entry.cat_mark) : '';
+      const exam = hasExam ? Number(entry.exam_mark) : '';
+      const total = hasCat || hasExam ? (Number(cat) || 0) + (Number(exam) || 0) : '';
+      const grade = total === '' ? '' : getGrade(total);
+      const name = `${s.first_name} ${s.last_name}`.replace(/"/g, '""');
+      csv += `"${s.admission_no}","${name}",${cat},${exam},${total},"${grade}"\r\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -1518,7 +1582,7 @@ function RegisterStudent() {
       email: String(data.get('email') || '').trim(),
       course_id: Number(data.get('course_id')),
       year_of_study: Number(data.get('yearOfStudy') || 1),
-      admission_date: String(data.get('admissionDate') || new Date().toISOString().split('T')[0]),
+      admission_date: String(data.get('admissionDate') || todayLocal()),
       password: String(data.get('password') || 'Siwaka@2026'),
       status: 'active',
     };
@@ -1565,7 +1629,7 @@ function RegisterStudent() {
               Date of Birth *<input type="date" name="dob" defaultValue="2005-01-01" required />
             </label>
             <label>
-              Admission Date *<input type="date" name="admissionDate" defaultValue={new Date().toISOString().split('T')[0]} required />
+              Admission Date *<input type="date" name="admissionDate" defaultValue={todayLocal()} required />
             </label>
             <label>
               Email Address<input type="email" name="email" placeholder="student@siwaka.ac.ke" />
@@ -1616,6 +1680,7 @@ function FeePayments() {
   const [semesters, setSemesters] = useState([]);
   const [query, setQuery] = useState('');
   const [searchedStudent, setSearchedStudent] = useState(null);
+  const [matches, setMatches] = useState([]);
   const [studentBalance, setStudentBalance] = useState(null);
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('M-Pesa');
@@ -1633,9 +1698,6 @@ function FeePayments() {
         ]);
         setStudents(stdList || []);
         setSemesters(semList || []);
-        if (stdList && stdList.length > 0) {
-          setSearchedStudent(stdList[0]);
-        }
         if (semList && semList.length > 0) {
           const current = semList.find((s) => s.is_current) || semList[0];
           setSelectedSemester(current.semester_id);
@@ -1650,7 +1712,11 @@ function FeePayments() {
   // Calculate or fetch balance for searched student
   useEffect(() => {
     async function fetchBalance() {
-      if (!searchedStudent) return;
+      if (!searchedStudent) {
+        setStudentBalance(null);
+        return;
+      }
+      setStudentBalance(null);
       try {
         const reports = await api.getOutstandingFees(selectedSemester || null);
         const match = (reports || []).find((r) => r.student_id === searchedStudent.student_id);
@@ -1662,24 +1728,39 @@ function FeePayments() {
     fetchBalance();
   }, [searchedStudent, selectedSemester]);
 
+  const chooseStudent = (student) => {
+    setSearchedStudent(student);
+    setMatches([]);
+  };
+
   const handleSearch = () => {
     const q = query.trim().toLowerCase();
     if (!q) return;
-    const found = students.find(
+    const found = students.filter(
       (s) =>
         s.admission_no.toLowerCase().includes(q) ||
         `${s.first_name} ${s.last_name}`.toLowerCase().includes(q)
     );
-    if (found) {
-      setSearchedStudent(found);
-    } else {
+    if (found.length === 0) {
+      setMatches([]);
       showToast(`No student found matching "${query}"`, 'error');
+    } else if (found.length === 1) {
+      chooseStudent(found[0]);
+    } else {
+      setMatches(found.slice(0, 8)); // let the admin choose; never guess
+      if (found.length > 8) showToast('Showing the first 8 matches, refine your search', 'info');
     }
   };
 
   const handlePay = async (event) => {
     event.preventDefault();
-    if (!searchedStudent || !amount) return;
+    if (!searchedStudent || !amount || !selectedSemester) return;
+
+    // Payments cannot be edited or reversed yet, so make the admin confirm who is being credited.
+    const ok = window.confirm(
+      `Record KES ${Number(amount).toLocaleString()} for ${searchedStudent.first_name} ${searchedStudent.last_name} (${searchedStudent.admission_no})?`
+    );
+    if (!ok) return;
 
     setSubmitting(true);
     try {
@@ -1687,7 +1768,7 @@ function FeePayments() {
         student_id: searchedStudent.student_id,
         semester_id: Number(selectedSemester),
         amount_paid: Number(amount),
-        payment_date: new Date().toISOString().split('T')[0],
+        payment_date: todayLocal(),
         payment_method: paymentMethod,
         reference_no: reference.trim() || `PAY-${Date.now()}`,
       };
@@ -1723,6 +1804,29 @@ function FeePayments() {
           </button>
         </div>
 
+        {matches.length > 1 && (
+          <div className="table-wrap" style={{ marginBottom: 18 }}>
+            <table>
+              <tbody>
+                {matches.map((m) => (
+                  <tr key={m.student_id}>
+                    <td className="font-bold text-blue-950">{m.admission_no}</td>
+                    <td>
+                      {m.first_name} {m.last_name}
+                    </td>
+                    <td>{m.course_name}</td>
+                    <td>
+                      <button className="btn btn-secondary" type="button" onClick={() => chooseStudent(m)}>
+                        Select
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         <div className="fee-layout">
           <section className="student-summary">
             <span>Student Summary</span>
@@ -1733,7 +1837,14 @@ function FeePayments() {
             <p>{searchedStudent?.course_name || 'No course'}</p>
             <div className="balance-box">
               <span>Outstanding Fee Balance</span>
-              <strong>KES {(studentBalance !== null ? studentBalance : 0).toLocaleString()}</strong>
+              <strong>
+                {!searchedStudent || studentBalance === null ? '—' : `KES ${Number(studentBalance).toLocaleString()}`}
+              </strong>
+              {searchedStudent && studentBalance === 0 && (
+                <small style={{ display: 'block', marginTop: 6, color: 'rgba(255,255,255,.8)' }}>
+                  No balance found. Either fully paid, or no fee structure is set for this course and semester.
+                </small>
+              )}
             </div>
           </section>
 
@@ -1757,8 +1868,8 @@ function FeePayments() {
               Amount (KES) *
               <input
                 type="number"
-                min="1"
-                step="100"
+                min="0.01"
+                step="0.01"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="e.g. 10000"
@@ -2540,8 +2651,8 @@ function MyUnits() {
                   <p>{u.course_name}</p>
                   <strong>{u.students_registered} students</strong>
                   <div className="footer-actions">
-                    <Link className="btn btn-secondary" to="/lecturer/attendance">Attendance</Link>
-                    <Link className="btn btn-primary" to="/lecturer/marks">Marks</Link>
+                    <Link className="btn btn-secondary" to={`/lecturer/attendance?unit=${u.unit_id}`}>Attendance</Link>
+                    <Link className="btn btn-primary" to={`/lecturer/marks?unit=${u.unit_id}`}>Marks</Link>
                   </div>
                 </div>
               ))}

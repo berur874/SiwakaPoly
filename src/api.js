@@ -1,6 +1,6 @@
 /**
  * Siwaka Polytechnic MIS - API Client
- * Aligned with Backend/API_ENDPOINTS.md (34 routes)
+ * Aligned with Backend/API_ENDPOINTS.md (35 routes)
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -40,7 +40,11 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    if (response.status === 401 && !endpoint.includes('login') && endpoint !== '/me') {
+    // 401 means "session expired" everywhere EXCEPT endpoints where 401 is an expected,
+    // user-correctable answer (wrong password on login / change-password).
+    const expectedAuthFailure =
+      endpoint.includes('login') || endpoint === '/me' || endpoint === '/change-password';
+    if (response.status === 401 && !expectedAuthFailure) {
       window.dispatchEvent(new Event('auth-expired'));
     }
     const errorMsg = (data && data.error) || (data && data.message) || response.statusText || 'Request failed';
@@ -196,6 +200,13 @@ export const api = {
   getClassList: (unitId, semesterId = null) => {
     const query = semesterId ? `?semester_id=${encodeURIComponent(semesterId)}` : '';
     return request(`/lecturer/units/${unitId}/students${query}`, { method: 'GET' });
+  },
+
+  // GET /lecturer/units/<unit_id>/attendance?date= - Already-saved attendance for one date
+  getAttendanceForDate: (unitId, date, semesterId = null) => {
+    const params = new URLSearchParams({ date });
+    if (semesterId) params.set('semester_id', semesterId);
+    return request(`/lecturer/units/${unitId}/attendance?${params}`, { method: 'GET' });
   },
 
   // POST /lecturer/units/<unit_id>/attendance - Record attendance (optional semester_id)
