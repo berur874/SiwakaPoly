@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import api from './api';
+import { gradeFor, kes } from './utils';
 
 // -------------------------------------------------------------
 // Toast Notification Context
@@ -82,6 +83,12 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     fetchSession();
+    const expired = () => {
+      setCurrentUser(null);
+      showToast('Session expired, please sign in again', 'error');
+    };
+    window.addEventListener('auth-expired', expired);
+    return () => window.removeEventListener('auth-expired', expired);
   }, []);
 
   const login = async (username, password, isAdmin = false) => {
@@ -239,7 +246,7 @@ function ChangePasswordModal({ isOpen, onClose }) {
 
 function PortalLayout({ children, role }) {
   const navigate = useNavigate();
-  const { currentUser, logout } = useAuth();
+  const { currentUser, loading, logout } = useAuth();
   const [pwdModalOpen, setPwdModalOpen] = useState(false);
 
   const displayName = useMemo(() => {
@@ -250,6 +257,12 @@ function PortalLayout({ children, role }) {
     return currentUser.role === 'admin' ? 'System Administrator' : currentUser.role;
   }, [currentUser, role]);
 
+  const ICONS = {
+    'Dashboard': '◈', 'Register Student': '＋', 'Students List': '☰', 'Lecturers List': '✎', 'Fee Payments': '₭',
+    'User Accounts': '⚿', 'Lookups & Catalog': '❖', 'Fee Reports': '▤', 'Allocations & Fees': '⇄', 'Record Attendance': '✔', 'Enter Marks': '✐',
+    'My Units': '▣', 'Unit Registration': '⊕', 'My Results': '★', 'Fee Statement': '₭', 'Attendance Log': '◷',
+  };
+  const initials = displayName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
   const links =
     role === 'Admin'
       ? [
@@ -260,13 +273,14 @@ function PortalLayout({ children, role }) {
           ['Fee Payments', '/admin/fees'],
           ['User Accounts', '/admin/users'],
           ['Lookups & Catalog', '/admin/lookups'],
+          ['Allocations & Fees', '/admin/setup'],
           ['Fee Reports', '/admin/reports'],
         ]
       : role === 'Lecturer'
       ? [
+          ['My Units', '/lecturer/units'],
           ['Record Attendance', '/lecturer/attendance'],
           ['Enter Marks', '/lecturer/marks'],
-          ['My Units', '/lecturer/units'],
         ]
       : [
           ['Dashboard', '/student/dashboard'],
@@ -281,6 +295,13 @@ function PortalLayout({ children, role }) {
     navigate('/login');
   };
 
+  if (loading) return <div className="login-page"><p style={{ color: '#fff', position: 'relative', zIndex: 1 }}>Loading…</p></div>;
+  if (!currentUser) return <Navigate to={role === 'Admin' ? '/admin/login' : '/login'} replace />;
+  if (currentUser.role !== role.toLowerCase()) {
+    const home = { admin: '/admin/dashboard', lecturer: '/lecturer/units', student: '/student/dashboard' };
+    return <Navigate to={home[currentUser.role] || '/login'} replace />;
+  }
+
   return (
     <div className="portal">
       <header className="topbar">
@@ -289,7 +310,8 @@ function PortalLayout({ children, role }) {
           <strong>Siwaka Polytechnic</strong>
         </div>
         <div className="welcome flex items-center gap-4">
-          <span className="text-sm font-semibold">Welcome, {displayName}</span>
+          <span className="avatar" aria-hidden="true">{initials}</span>
+          <span className="text-sm font-semibold">{displayName}</span>
           <button
             onClick={() => setPwdModalOpen(true)}
             className="text-xs bg-blue-800 text-blue-100 px-2 py-1 rounded hover:bg-blue-700 transition"
@@ -305,6 +327,7 @@ function PortalLayout({ children, role }) {
       <aside className="sidebar">
         {links.map(([label, path]) => (
           <NavLink key={path} to={path} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <span className="nav-ico">{ICONS[label] || '•'}</span>
             {label}
           </NavLink>
         ))}
@@ -339,7 +362,7 @@ function Login() {
       if (role === 'admin') {
         navigate('/admin/dashboard');
       } else if (role === 'lecturer') {
-        navigate('/lecturer/attendance');
+        navigate('/lecturer/units');
       } else {
         navigate('/student/dashboard');
       }
@@ -352,7 +375,12 @@ function Login() {
 
   return (
     <main className="login-page">
-      <div className="w-full max-w-md flex justify-end mb-2">
+      <section className="login-hero">
+        <h2>Learning, <em>simplified.</em></h2>
+        <p>One portal for units, marks, attendance and fees at Siwaka Polytechnic.</p>
+        <div className="hero-chips"><span>Register units</span><span>Live results</span><span>Fee statements</span><span>Attendance</span></div>
+      </section>
+      <div className="w-full max-w-md flex justify-end mb-2" style={{ position: 'relative', zIndex: 1, gridColumn: 2 }}>
         {isAdminPortal ? (
           <button
             onClick={() => navigate('/login')}
@@ -423,23 +451,26 @@ function StudentDashboard() {
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [feeData, setFeeData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const { showToast } = useToast();
 
   useEffect(() => {
     async function loadData() {
       setLoading(true);
+      setError('');
       try {
         const [prof, regs, att, fees] = await Promise.all([
-          api.getStudentProfile().catch(() => null),
-          api.getStudentRegistrations().catch(() => []),
-          api.getStudentAttendance().catch(() => []),
-          api.getStudentFees().catch(() => null),
+          api.getStudentProfile(),
+          api.getStudentRegistrations(),
+          api.getStudentAttendance(),
+          api.getStudentFees(),
         ]);
         setProfile(prof);
         setRegistrations(regs || []);
         setAttendanceRecords(att || []);
         setFeeData(fees);
       } catch (err) {
+        setError(err.message || 'Could not load your dashboard');
         showToast(err.message, 'error');
       } finally {
         setLoading(false);
@@ -449,7 +480,7 @@ function StudentDashboard() {
   }, []);
 
   const attendancePercentage = useMemo(() => {
-    if (!attendanceRecords || attendanceRecords.length === 0) return 100;
+    if (!attendanceRecords || attendanceRecords.length === 0) return null;
     const attended = attendanceRecords.filter((a) => a.status === 'Present' || a.status === 'Late').length;
     return Math.round((attended / attendanceRecords.length) * 100);
   }, [attendanceRecords]);
@@ -461,19 +492,21 @@ function StudentDashboard() {
       <Page title="Student Dashboard">
         {loading ? (
           <div className="py-8 text-center text-slate-500">Loading student data...</div>
+        ) : error ? (
+          <div className="error-banner">{error} <button className="btn btn-secondary" onClick={() => window.location.reload()}>Retry</button></div>
         ) : (
           <>
             <p className="subheader">
-              {profile?.course_name || 'Diploma in Information Technology'} | Year {profile?.year_of_study || 1} |{' '}
+              {profile?.course_name} | Year {profile?.year_of_study} |{' '}
               {profile?.admission_no}
             </p>
             <StatCards
               cards={[
                 { title: 'Registered Units', value: registrations.length, color: 'navy' },
-                { title: 'Attendance', value: `${attendancePercentage}%`, color: 'green' },
+                { title: 'Attendance', value: attendancePercentage === null ? '—' : `${attendancePercentage}%`, color: 'green' },
                 {
                   title: 'Fee Balance',
-                  value: `KES ${feeBalance.toLocaleString()}`,
+                  value: kes(feeBalance),
                   color: feeBalance > 0 ? 'red' : 'green',
                   textColor: feeBalance > 0 ? 'red-text' : '',
                 },
@@ -1192,13 +1225,7 @@ function Marks() {
     }));
   };
 
-  const getGrade = (total) => {
-    if (total >= 70) return 'A';
-    if (total >= 60) return 'B';
-    if (total >= 50) return 'C';
-    if (total >= 40) return 'D';
-    return 'E';
-  };
+  const getGrade = gradeFor;
 
   const handleSaveMarks = async () => {
     if (!selectedUnit || classList.length === 0) return;
@@ -1845,6 +1872,7 @@ function UserAccounts() {
     }
   };
 
+  const { currentUser: me } = useAuth();
   const handleToggleStatus = async (userId, currentStatus) => {
     const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
     try {
@@ -1920,6 +1948,8 @@ function UserAccounts() {
                         </button>
                         <button
                           className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 font-semibold"
+                          disabled={user.user_id === me?.user_id}
+                          title={user.user_id === me?.user_id ? 'You cannot change your own account' : ''}
                           onClick={() => handleToggleStatus(user.user_id, user.status)}
                         >
                           {user.status === 'active' ? 'Deactivate' : 'Activate'}
@@ -2489,6 +2519,94 @@ function AdminReports() {
 }
 
 // -------------------------------------------------------------
+// LECTURER: MY UNITS
+// -------------------------------------------------------------
+function MyUnits() {
+  const [units, setUnits] = useState(null);
+  const { showToast } = useToast();
+  useEffect(() => {
+    api.getLecturerUnits().then(setUnits).catch((e) => { setUnits([]); showToast(e.message, 'error'); });
+  }, []);
+  return (
+    <PortalLayout role="Lecturer">
+      <Page title="My Units" eyebrow="Current semester">
+        {units === null ? <div className="py-8 text-center text-slate-500">Loading units...</div>
+          : units.length === 0 ? <div className="error-banner">No units are allocated to you this semester.</div>
+          : <div className="unit-grid">
+              {units.map((u) => (
+                <div className="unit-card" key={u.unit_id}>
+                  <span className="status-green">{u.unit_code}</span>
+                  <h3>{u.unit_name}</h3>
+                  <p>{u.course_name}</p>
+                  <strong>{u.students_registered} students</strong>
+                  <div className="footer-actions">
+                    <Link className="btn btn-secondary" to="/lecturer/attendance">Attendance</Link>
+                    <Link className="btn btn-primary" to="/lecturer/marks">Marks</Link>
+                  </div>
+                </div>
+              ))}
+            </div>}
+      </Page>
+    </PortalLayout>
+  );
+}
+
+// -------------------------------------------------------------
+// ADMIN: UNIT ALLOCATIONS & FEE STRUCTURES (endpoints that had no UI)
+// -------------------------------------------------------------
+function AdminSetup() {
+  const [lk, setLk] = useState({ units: [], lecturers: [], semesters: [], courses: [] });
+  const [alloc, setAlloc] = useState({ unit_id: '', lecturer_id: '', semester_id: '' });
+  const [fee, setFee] = useState({ course_id: '', semester_id: '', amount_due: '' });
+  const { showToast } = useToast();
+
+  useEffect(() => {
+    Promise.all([api.listLookup('units'), api.listLecturers(), api.listLookup('semesters'), api.listLookup('courses')])
+      .then(([units, lecturers, semesters, courses]) => {
+        setLk({ units, lecturers, semesters, courses });
+        const cur = semesters.find((x) => x.is_current)?.semester_id || '';
+        setAlloc((a) => ({ ...a, semester_id: cur }));
+        setFee((f) => ({ ...f, semester_id: cur }));
+      })
+      .catch((e) => showToast(e.message, 'error'));
+  }, []);
+
+  const submit = (fn, body, msg) => async (e) => {
+    e.preventDefault();
+    try { await fn(body); showToast(msg, 'success'); } catch (err) { showToast(err.message, 'error'); }
+  };
+  const sems = lk.semesters.map((x) => <option key={x.semester_id} value={x.semester_id}>{x.academic_year} · {x.semester_name}{x.is_current ? ' (current)' : ''}</option>);
+  const set = (setter) => (k) => (e) => setter((v) => ({ ...v, [k]: e.target.value }));
+
+  return (
+    <PortalLayout role="Admin">
+      <Page title="Allocations & Fees" eyebrow="Academic setup">
+        <div className="fee-layout">
+          <form className="student-form" onSubmit={submit(api.allocateUnit, { ...alloc, unit_id: +alloc.unit_id, lecturer_id: +alloc.lecturer_id, semester_id: +alloc.semester_id }, 'Unit allocated (any previous lecturer replaced)')}>
+            <h2 className="section-heading">Allocate unit to lecturer</h2>
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
+              <label>Unit<select required value={alloc.unit_id} onChange={set(setAlloc)('unit_id')}><option value="">Select…</option>{lk.units.map((u) => <option key={u.unit_id} value={u.unit_id}>{u.unit_code} · {u.unit_name}</option>)}</select></label>
+              <label>Lecturer<select required value={alloc.lecturer_id} onChange={set(setAlloc)('lecturer_id')}><option value="">Select…</option>{lk.lecturers.map((l) => <option key={l.lecturer_id} value={l.lecturer_id}>{l.first_name} {l.last_name} ({l.staff_no})</option>)}</select></label>
+              <label>Semester<select required value={alloc.semester_id} onChange={set(setAlloc)('semester_id')}>{sems}</select></label>
+            </div>
+            <div className="form-actions"><button className="btn btn-primary" type="submit">Allocate</button></div>
+          </form>
+          <form className="student-form" onSubmit={submit(api.setFeeStructure, { ...fee, course_id: +fee.course_id, semester_id: +fee.semester_id, amount_due: Number(fee.amount_due) }, 'Fee structure saved')}>
+            <h2 className="section-heading">Set fee structure</h2>
+            <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
+              <label>Course<select required value={fee.course_id} onChange={set(setFee)('course_id')}><option value="">Select…</option>{lk.courses.map((c) => <option key={c.course_id} value={c.course_id}>{c.course_name}</option>)}</select></label>
+              <label>Semester<select required value={fee.semester_id} onChange={set(setFee)('semester_id')}>{sems}</select></label>
+              <label>Amount due (KES)<input required type="number" min="0" step="0.01" value={fee.amount_due} onChange={set(setFee)('amount_due')} /></label>
+            </div>
+            <div className="form-actions"><button className="btn btn-primary" type="submit">Save</button></div>
+          </form>
+        </div>
+      </Page>
+    </PortalLayout>
+  );
+}
+
+// -------------------------------------------------------------
 // APP ROUTER
 // -------------------------------------------------------------
 export default function App() {
@@ -2510,7 +2628,7 @@ export default function App() {
           {/* Lecturer Routes */}
           <Route path="/lecturer/attendance" element={<Attendance />} />
           <Route path="/lecturer/marks" element={<Marks />} />
-          <Route path="/lecturer/units" element={<Attendance />} />
+          <Route path="/lecturer/units" element={<MyUnits />} />
 
           {/* Admin Routes */}
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
@@ -2520,6 +2638,7 @@ export default function App() {
           <Route path="/admin/fees" element={<FeePayments />} />
           <Route path="/admin/users" element={<UserAccounts />} />
           <Route path="/admin/lookups" element={<AdminLookups />} />
+          <Route path="/admin/setup" element={<AdminSetup />} />
           <Route path="/admin/reports" element={<AdminReports />} />
 
           {/* Fallback */}

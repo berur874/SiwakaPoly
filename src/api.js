@@ -40,6 +40,9 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && !endpoint.includes('login') && endpoint !== '/me') {
+      window.dispatchEvent(new Event('auth-expired'));
+    }
     const errorMsg = (data && data.error) || (data && data.message) || response.statusText || 'Request failed';
     throw new ApiError(errorMsg, response.status, data);
   }
