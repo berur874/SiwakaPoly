@@ -1,5 +1,6 @@
 import math
 from collections import Counter
+from datetime import date as _date
 
 from db import db, fetch_all, first, now_iso, one, semester_or_current
 from utils import ApiError, require, with_totals
@@ -79,6 +80,23 @@ class LecturerService:
                 "cat_mark": marks.get("cat_mark"), "exam_mark": marks.get("exam_mark"),
             }))
         return sorted(out, key=lambda r: r["admission_no"])
+
+    def attendance_for_date(self, user_id, unit_id, date_str, semester_id=None):
+        """Attendance already saved for this unit on one date, so the UI can show it
+        instead of defaulting everyone to Present and overwriting it."""
+        try:
+            day = _date.fromisoformat(date_str or "")
+        except ValueError:
+            raise ApiError("date must be in YYYY-MM-DD format")
+        lecturer_id = self._lecturer_id(user_id)
+        sem = semester_or_current(semester_id)
+        self._check_allocation(lecturer_id, unit_id, sem)
+        reg_ids = [r["registration_id"] for r in self._class(unit_id, sem)]
+        if not reg_ids:
+            return []
+        return (db().table("attendance").select("registration_id, status")
+                .eq("attendance_date", day.isoformat()).in_("registration_id", reg_ids)
+                .execute().data)
 
     def record_attendance(self, user_id, unit_id, data, semester_id=None):
         require(data, "date", "records")

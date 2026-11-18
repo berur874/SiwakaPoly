@@ -45,9 +45,10 @@
 |--------|-------|-------------|
 | GET | `/lecturer/units` | List own units (optional `semester_id`) |
 | GET | `/lecturer/units/<unit_id>/students` | Class list (optional `semester_id`) |
+| GET | `/lecturer/units/<unit_id>/attendance?date=YYYY-MM-DD` | Attendance already saved for that date (optional `semester_id`) |
 | POST | `/lecturer/units/<unit_id>/attendance` | Record attendance (optional `semester_id`) |
 | POST | `/lecturer/units/<unit_id>/marks` | Enter marks (optional `semester_id`) |
 
-**Total: 34 routes**
+**Total: 35 routes**
 
 Note: `<table>` routes are dynamic and expand into 12 concrete endpoints (3 methods × 4 tables).

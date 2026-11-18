@@ -239,6 +239,12 @@ def lecturer_class_list(unit_id):
     return jsonify(lecturers.class_list(uid(), unit_id, semester_arg()))
 
 
+@api.get("/lecturer/units/<int:unit_id>/attendance")
+@lecturer_only
+def lecturer_attendance_for_date(unit_id):
+    return jsonify(lecturers.attendance_for_date(uid(), unit_id, request.args.get("date"), semester_arg()))
+
+
 @api.post("/lecturer/units/<int:unit_id>/attendance")
 @lecturer_only
 def lecturer_attendance(unit_id):
