@@ -5,6 +5,7 @@ from AuthService import AuthService
 from TeachersService import LecturerService
 from SessionManager import SessionManager
 from StudentService import StudentService
+from rate_limit import limiter
 from utils import ApiError, require
 
 api = Blueprint("api", __name__)
@@ -48,11 +49,13 @@ def _do_login(allowed_roles):
 
 
 @api.post("/login")
+@limiter.limit("5 per minute")
 def login():
     return _do_login({"student", "lecturer"})
 
 
 @api.post("/admin/login")
+@limiter.limit("5 per minute")
 def admin_login():
     return _do_login({"admin"})
 

@@ -7,9 +7,11 @@ load_dotenv()  # before anything reads os.environ
 
 import httpx
 from flask import Flask, jsonify
+from flask_limiter.errors import RateLimitExceeded
 from postgrest.exceptions import APIError
 
 from routes import api
+from rate_limit import limiter
 from utils import ApiError
 
 app = Flask(__name__)
@@ -20,6 +22,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1",  # set to 1 on HTTPS
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
+limiter.init_app(app)
 
 # Only needed when the frontend runs on another origin, e.g. http://localhost:5173
 if os.environ.get("FRONTEND_ORIGIN"):
@@ -27,6 +30,15 @@ if os.environ.get("FRONTEND_ORIGIN"):
     CORS(app, supports_credentials=True, origins=[os.environ["FRONTEND_ORIGIN"]])
 
 app.register_blueprint(api)
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit(e):
+    response = jsonify(error="too many requests, please try again later")
+    response.status_code = 429
+    if getattr(e, "retry_after", None):
+        response.headers["Retry-After"] = str(e.retry_after)
+    return response
 
 
 @app.errorhandler(ApiError)
