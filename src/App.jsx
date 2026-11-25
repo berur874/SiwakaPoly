@@ -379,24 +379,24 @@ function Login() {
         <h2>Learning, <em>simplified.</em></h2>
         <p>One portal for units, marks, attendance and fees at Siwaka Polytechnic.</p>
         <div className="hero-chips"><span>Register units</span><span>Live results</span><span>Fee statements</span><span>Attendance</span></div>
+        <div className="login-portal-toggle">
+          {isAdminPortal ? (
+            <button
+              onClick={() => navigate('/login')}
+              className="btn btn-secondary"
+            >
+              &larr; Student / Lecturer Portal
+            </button>
+          ) : (
+            <button
+              onClick={() => navigate('/admin/login')}
+              className="btn btn-secondary"
+            >
+              Admin Portal &rarr;
+            </button>
+          )}
+        </div>
       </section>
-      <div className="w-full max-w-md flex justify-end mb-2" style={{ position: 'relative', zIndex: 1, gridColumn: 2 }}>
-        {isAdminPortal ? (
-          <button
-            onClick={() => navigate('/login')}
-            className="text-xs font-semibold text-blue-900 hover:underline"
-          >
-            &larr; Student / Lecturer Portal
-          </button>
-        ) : (
-          <button
-            onClick={() => navigate('/admin/login')}
-            className="text-xs font-semibold text-slate-600 hover:text-blue-900 hover:underline"
-          >
-            Admin Portal &rarr;
-          </button>
-        )}
-      </div>
 
       <form className="login-card" onSubmit={handleSubmit}>
         <Logo />
@@ -2038,10 +2038,10 @@ function UserAccounts() {
                 ) : (
                   visibleUsers.map((user) => (
                     <tr key={user.user_id || user.username}>
-                      <td className="font-semibold text-slate-800">{user.name}</td>
+                      <td className="admin-user-name font-semibold">{user.name}</td>
                       <td className="font-bold text-blue-950">{user.username}</td>
                       <td>
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100">
+                        <span className="admin-role-badge text-xs font-semibold px-2 py-0.5 rounded">
                           {user.role}
                         </span>
                       </td>
